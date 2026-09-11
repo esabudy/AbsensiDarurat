@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Presensi Karyawan Wisma Mulia 2</title>
+  <style>
+    :root{--accent:#0ea5a4;--muted:#6b7280}
+    *{box-sizing:border-box}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial; margin:0; background:#f8fafc; color:#0f172a}
+    .container{max-width:720px;margin:24px auto;padding:20px}
+    .card{background:white;border-radius:14px;box-shadow:0 6px 18px rgba(15,23,42,0.06);padding:18px}
+    h1{font-size:20px;margin:0 0 8px}
+    p.lead{color:var(--muted);margin:0 0 12px}
+    .center{display:flex;align-items:center;justify-content:center}
+    button{background:var(--accent);color:white;border:0;padding:10px 14px;border-radius:10px;font-weight:600; cursor:pointer;}
+    button.ghost{background:transparent;color:var(--accent);border:1px solid rgba(14,165,164,0.12)}
+    button:disabled{opacity:0.6; cursor:not-allowed}
+    .muted{color:var(--muted);font-size:13px}
+    .notice{padding:10px;border-radius:10px;margin-bottom:12px}
+    .notice.warn{background:#fff7ed;color:#92400e}
+    .notice.err{background:#fff1f2;color:#9f1239}
+    .row{display:flex;gap:10px}
+    .col{flex:1}
+    label{display:block;font-size:13px;margin-bottom:6px}
+    input[type=text], select{width:100%;padding:10px;border-radius:10px;border:1px solid #e6eef2}
+    
+    /* Area Kamera */
+    #camera-wrap { margin-top: 14px; text-align: center; }
+    #camera-stream { border-radius: 10px; background: #000; max-height: 250px; width: 100%; object-fit: cover; }
+    
+    footer{margin-top:14px;font-size:12px;color:var(--muted)}
+    @media(max-width:420px){.container{margin:12px;padding:14px}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <img src="https://www.cakerja.com/wp-content/uploads/2023/07/Lowongan-Kerja-PT-Mulia-Land-Mulia-Group.jpg" alt="Logo Mulia" style="width:220px;height:auto;margin-bottom:12px;">
+      <h1>Presensi Karyawan Wisma Mulia 2</h1>
+      <p class="lead">Kami akan memverifikasi lokasi dan wajah Anda sebelum mengizinkan proses presensi.</p>
+
+      <div id="status" class="muted">Memeriksa kapabilitas perangkat...</div>
+
+      <div id="controls" style="margin-top:12px">
+        <div id="before-allowed">
+          <button id="btn-check">Verifikasi Lokasi & Buka Kamera</button>
+        </div>
+      </div>
+
+      <div id="form-wrap" style="display:none;margin-top:14px">
+        <div class="notice warn">Lokasi divalidasi. Wajah Anda akan difoto otomatis saat klik "Kirim".</div>
+        
+        <!-- Video Stream Wajah Pengguna -->
+        <div id="camera-wrap">
+          <video id="camera-stream" autoplay playsinline></video>
+          <canvas id="canvas" style="display:none;"></canvas>
+        </div>
+
+        <form id="att-form" style="margin-top: 14px;">
+          <label for="name">Nama</label>
+          <input id="name" name="name" type="text" required autocomplete="name">
+          <div style="height:10px"></div>
+          
+          <label for="staffid">ID Pegawai</label>
+          <input id="staffid" name="id" type="text" required>
+          <div style="height:10px"></div>
+          
+          <div class="row">
+            <div class="col">
+              <label for="dept">Departemen</label>
+              <select id="dept" name="department" required>
+                <option value="HR">Human Resource</option>
+                <option value="Security">Security</option>
+                <option value="Engineering">Engineering</option>
+                <option value="Housekeeping">Housekeeping</option>
+              </select>
+            </div>
+            <div class="col">
+              <label for="atype">IN / OUT</label>
+              <select id="atype" name="attendanceType" required>
+                <option value="Check In">Check In</option>
+                <option value="Check Out">Check Out</option>
+              </select>
+            </div>
+          </div>
+          
+          <div style="height:14px"></div>
+          <div class="center">
+            <button type="submit" id="btn-submit">Kirim Presensi</button>
+            <div style="width:10px"></div>
+            <button type="button" id="btn-cancel" class="ghost">Batal</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="result" style="margin-top:12px"></div>
+      <footer>
+        <div id="debug" class="muted"></div>
+      </footer>
+    </div>
+  </div>
+
+<script>
+// CONFIG
+const OFFICE = { lat: -6.493633, lon: 106.801701 }; //TITIK KOORDINAT ABSEN
+const RADIUS_METERS = 20; // 20 METER RADIUS DARI TITIK KOORDINAT ABSEN
+let GAS_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwYbFB-xB76ZXGPd9EiIA_Bq68-is2LSc6zTmLFNduLUpEFDgIXqr2MDLPB-XSiCXFG4g/exec';
+
+// GLOBAL VARIABLES
+let videoStream = null;
+let currentLat = 0;
+let currentLon = 0;
+let currentDistance = 0;
+
+const statusEl = document.getElementById('status');
+const formWrap = document.getElementById('form-wrap');
+const resultEl = document.getElementById('result');
+const debugEl = document.getElementById('debug');
+const videoEl = document.getElementById('camera-stream');
+
+function setStatus(t){ statusEl.textContent = t; }
+function setDebug(t){ debugEl.textContent = t; }
+function toRad(v){ return v * Math.PI / 180; }
+
+function distanceMeters(lat1, lon1, lat2, lon2){
+  const R = 6371000;
+  const dLat = toRad(lat2-lat1);
+  const dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+async function verifyLocation(){
+  setStatus('Meminta lokasi perangkat...');
+  if(!navigator.geolocation){ setStatus('Perangkat tidak mendukung geolokasi.'); return false; }
+
+  return new Promise((resolve)=>{
+    const opts = { enableHighAccuracy:true, maximumAge:0, timeout:15000 };
+    navigator.geolocation.getCurrentPosition((pos)=>{
+      const lat = pos.coords.latitude, lon = pos.coords.longitude;
+      const d = distanceMeters(OFFICE.lat, OFFICE.lon, lat, lon);
+      
+      // Simpan ke variabel global
+      currentLat = lat;
+      currentLon = lon;
+      currentDistance = Math.round(d);
+      
+      setDebug(`Jarak ke titik kantor: ${currentDistance} meter`);
+      if(d <= RADIUS_METERS){ 
+        setStatus('Lokasi valid.'); 
+        resolve(true); 
+      } else { 
+        setStatus('Anda berada di luar area presensi.'); 
+        resolve(false); 
+      }
+    }, (err)=>{
+      setStatus('Gagal mendapatkan lokasi. Pastikan GPS aktif dan diizinkan.');
+      resolve(false);
+    }, opts);
+  });
+}
+
+async function startCamera() {
+  try {
+    videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+    videoEl.srcObject = videoStream;
+    return true;
+  } catch (err) {
+    console.error(err);
+    setStatus('Gagal mengakses kamera. Mohon izinkan akses kamera pada browser Anda.');
+    return false;
+  }
+}
+
+function stopCamera() {
+  if (videoStream) {
+    videoStream.getTracks().forEach(track => track.stop());
+    videoStream = null;
+  }
+}
+
+function capturePhoto() {
+  const canvas = document.getElementById('canvas');
+  if (!videoEl.videoWidth) return '';
+  
+  // --- MULAI PERUBAHAN: KOMPRESI UKURAN FOTO ---
+  const MAX_WIDTH = 640; // Batas lebar maksimal foto agar ringan
+  let width = videoEl.videoWidth;
+  let height = videoEl.videoHeight;
+  
+  // Perkecil ukuran secara proporsional jika kamera HP terlalu besar (HD)
+  if (width > MAX_WIDTH) {
+    height = Math.round(height * (MAX_WIDTH / width));
+    width = MAX_WIDTH;
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  
+  // 1. Gambar tangkapan video asli ke kanvas yang ukurannya sudah diperkecil
+  ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+  // --- AKHIR PERUBAHAN: KOMPRESI UKURAN FOTO ---
+  
+  // 2. Siapkan informasi untuk watermark (Format: YYYY-MM-DD HH:MM WIB)
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const timeNow = `${year}-${month}-${day} ${hours}:${minutes} WIB`;
+  
+  const namaPegawai = document.getElementById('name').value.trim() || 'Belum diisi';
+  const attendanceType = document.getElementById('atype').value;
+  
+  // 3. Atur gaya teks (Ukuran font disesuaikan jadi 14px agar proporsional)
+  ctx.font = '14px Arial'; 
+  ctx.fillStyle = 'white';
+  ctx.strokeStyle = 'black';
+  ctx.lineWidth = 3;
+  
+  // 4. Siapkan teks per baris
+  const line1 = `Nama: ${namaPegawai} | ${attendanceType}`;
+  const line2 = `Waktu: ${timeNow}`;
+  const line3 = `GPS: ${currentLat.toFixed(6)}, ${currentLon.toFixed(6)}`;
+  const line4 = `Jarak dari titik: ${currentDistance} meter`;
+  
+  const lines = [line1, line2, line3, line4];
+  
+  // 5. Posisikan teks dari bawah
+  const paddingX = 15;
+  let paddingY = canvas.height - 80; 
+  
+  // Gambar setiap baris ke atas foto
+  lines.forEach(line => {
+    ctx.strokeText(line, paddingX, paddingY);
+    ctx.fillText(line, paddingX, paddingY);
+    paddingY += 20; 
+  });
+  
+  // Turunkan kualitas JPEG menjadi 60% (0.6) agar ukurannya lebih kecil lagi
+  return canvas.toDataURL('image/jpeg', 0.6); 
+}
+
+// Tombol Verifikasi
+document.getElementById('btn-check').addEventListener('click', async ()=>{
+  resultEl.innerHTML = '';
+  const btn = document.getElementById('btn-check');
+  btn.disabled = true;
+  
+  const locOk = await verifyLocation();
+  if(locOk){
+    setStatus('Meminta izin kamera...');
+    const camOk = await startCamera();
+    if (camOk) {
+      formWrap.style.display = 'block';
+      document.getElementById('before-allowed').style.display = 'none';
+      setStatus('Silakan isi formulir dan arahkan wajah ke kamera.');
+    }
+  }
+  btn.disabled = false;
+});
+
+// Batal
+document.getElementById('btn-cancel').addEventListener('click', ()=>{
+  formWrap.style.display = 'none';
+  document.getElementById('before-allowed').style.display = 'block';
+  stopCamera();
+  setStatus('Dibatalkan.');
+});
+
+// Submit Form
+document.getElementById('att-form').addEventListener('submit', async (ev)=>{
+  ev.preventDefault();
+  
+  // Deteksi jika kamera belum siap
+  if(!videoEl.videoWidth) { alert("Kamera belum siap, mohon tunggu sebentar."); return; }
+
+  const btnSubmit = document.getElementById('btn-submit');
+  btnSubmit.disabled = true;
+  
+  try {
+    const photoBase64 = capturePhoto(); 
+    const payload = {
+      name: document.getElementById('name').value.trim(),
+      id: document.getElementById('staffid').value.trim(),
+      department: document.getElementById('dept').value,
+      attendanceType: document.getElementById('atype').value,
+      photo: photoBase64
+    };
+
+    setStatus('Mengirim...');
+    const r = await fetch(GAS_WEBAPP_URL, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    
+    const j = await r.json();
+    if(j.result === 'success') {
+      alert("Presensi Berhasil!");
+      location.reload(); // Refresh halaman agar kamera reset
+    } else {
+      alert("Error dari server: " + j.error);
+    }
+  } catch(err) {
+    alert("Koneksi gagal: " + err.message);
+  }
+  btnSubmit.disabled = false;
+});
+
+setStatus('Klik tombol verifikasi untuk memulai.');
+</script>
+</body>
+</html>
+
